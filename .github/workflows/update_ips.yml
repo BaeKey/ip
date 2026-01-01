@@ -1,0 +1,55 @@
+name: Auto Generate IP Lists
+
+on:
+  # 计划任务：北京时间每周一早上 08:00 运行 (UTC时间 00:00)
+  schedule:
+    - cron: '0 18 * * *'
+  
+  # 允许在 Actions 页面手动点击 "Run workflow" 按钮立即触发
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    # 授予 GITHUB_TOKEN 写权限，以便将生成的文件推送到仓库
+    permissions:
+      contents: write
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. 设置 Python 环境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. 安装依赖 (只需要 requests)
+      - name: Install Dependencies
+        run: |
+          pip install requests
+
+      - name: Run Generator Script
+        run: |
+          python scripts/generate_all.py
+
+      - name: Commit and Push
+        run: |
+          # 配置 Git 身份为 GitHub Actions Bot
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add data/
+          
+          # 检查暂存区是否有变化
+          if git diff --staged --quiet; then
+            echo "No changes detected in IP lists. Skipping commit."
+          else
+            echo "Changes detected. Committing..."
+            # 提交信息带上日期
+            git commit -m "Auto-update: Nationwide IP lists (CMCC/Unicom/ChinaNet/All) [$(date +'%Y-%m-%d')]"
+            git push
+          fi
