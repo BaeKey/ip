@@ -8,7 +8,7 @@ import datetime
 # === 配置项 ===
 QQWRY_URL = "https://github.com/nmgliangwei/qqwry/raw/refs/heads/main/qqwry.dat"
 DB_FILE = "qqwry.dat"
-OUTPUT_FILE = "./data/china_ip_list.txt"  # 修改为单个输出文件
+OUTPUT_FILE = "china_ip_list.txt"  # 修改为单个输出文件
 
 # 1. 省份映射 (中文 -> 拼音)
 # 保持这个顺序，生成的文件也会按照这个顺序排列
