@@ -35,7 +35,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           
           # 添加 output 目录下的所有新文件夹和文件
-          git add data/
+          git add china_ip_list.txt
           
           if git diff --staged --quiet; then
             echo "No changes detected. Skipping commit."
