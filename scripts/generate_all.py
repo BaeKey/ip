@@ -3,23 +3,38 @@ import socket
 import ipaddress
 import os
 import requests
+import datetime
 
 # === 配置项 ===
 QQWRY_URL = "https://github.com/nmgliangwei/qqwry/raw/refs/heads/main/qqwry.dat"
 DB_FILE = "qqwry.dat"
 OUTPUT_DIR = "data"
 
-# 定义要抓取的运营商关键词
-TASKS = {
-    "cmcc": "移动",
-    "unicom": "联通",
-    "chinanet": "电信"
+# 1. 省份映射 (中文 -> 拼音)
+PROVINCES = {
+    "北京": "beijing", "天津": "tianjin", "河北": "hebei", "山西": "shanxi", "内蒙古": "neimenggu",
+    "辽宁": "liaoning", "吉林": "jilin", "黑龙江": "heilongjiang", "上海": "shanghai", "江苏": "jiangsu",
+    "浙江": "zhejiang", "安徽": "anhui", "福建": "fujian", "江西": "jiangxi", "山东": "shandong",
+    "河南": "henan", "湖北": "hubei", "湖南": "hunan", "广东": "guangdong", "广西": "guangxi",
+    "海南": "hainan", "重庆": "chongqing", "四川": "sichuan", "贵州": "guizhou", "云南": "yunnan",
+    "西藏": "xizang", "陕西": "shaanxi", "甘肃": "gansu", "青海": "qinghai", "宁夏": "ningxia",
+    "新疆": "xinjiang", "香港": "hongkong", "澳门": "macau", "台湾": "taiwan"
 }
+
+# 2. 运营商映射 (中文 -> 英文代码)
+ISPS = {
+    "移动": "cmcc",
+    "联通": "unicom",
+    "电信": "chinanet"
+}
+
+# 3. 预先生成反向映射 (用于写注释: beijing -> 北京, cmcc -> 移动)
+CODE_TO_PROV_CN = {v: k for k, v in PROVINCES.items()}
+CODE_TO_ISP_CN = {v: k for k, v in ISPS.items()}
 
 class QQWryParser:
     def __init__(self, filename):
         self.filename = filename
-        # 自动下载逻辑
         if not os.path.exists(filename):
             print(f"[Info] 正在下载数据库: {QQWRY_URL}")
             try:
@@ -78,12 +93,16 @@ class QQWryParser:
             return ""
 
     def run(self):
-        # 存储各运营商的原始 IP 段
-        matched_ips = {k: [] for k in TASKS.keys()}
+        # results[省份拼音][运营商代码] = [ranges]
+        results = {}
+        for p_code in PROVINCES.values():
+            results[p_code] = {isp_code: [] for isp_code in ISPS.values()}
         
-        print("[Info] 开始全库扫描...")
+        results['nationwide'] = {isp_code: [] for isp_code in ISPS.values()}
+
+        print("[Info] 开始全库扫描与分类...")
         for i in range(self.count):
-            if i % 100000 == 0 and i > 0:
+            if i % 200000 == 0 and i > 0:
                 print(f"  - 进度: {i}/{self.count}")
                 
             idx_offset = self.first_index + i * 7
@@ -93,58 +112,83 @@ class QQWryParser:
             
             location_str = self._get_addr(record_offset + 4)
             
-            for file_key, keyword in TASKS.items():
-                if keyword in location_str:
-                    matched_ips[file_key].append((start_ip, end_ip))
+            detected_isp_code = None
+            for isp_cn, isp_code in ISPS.items():
+                if isp_cn in location_str:
+                    detected_isp_code = isp_code
+                    break
+            
+            if not detected_isp_code:
+                continue
+
+            detected_prov_code = None
+            for prov_cn, prov_code in PROVINCES.items():
+                if prov_cn in location_str:
+                    detected_prov_code = prov_code
+                    break
+            
+            if detected_prov_code:
+                results[detected_prov_code][detected_isp_code].append((start_ip, end_ip))
+            
+            results['nationwide'][detected_isp_code].append((start_ip, end_ip))
 
         print("[Info] 扫描完成，正在处理文件导出...")
         
         if not os.path.exists(OUTPUT_DIR):
             os.makedirs(OUTPUT_DIR)
-            
-        # 1. 生成各运营商独立文件
-        # 同时我们将所有抓到的段放入 total_list 用于生成 all.txt
-        total_list = []
-        
-        for file_key, ranges in matched_ips.items():
-            # 将该运营商的所有段加入总表
-            total_list.extend(ranges)
-            
-            # 独立合并并写入
-            merged = self._merge_ranges(ranges)
-            self._write_to_file(merged, f"{file_key}.txt")
-            print(f"[Success] {TASKS[file_key]} -> {file_key}.txt (共 {len(merged)} 条)")
 
-        # 2. 生成合并版 (all.txt)
-        print("[Info] 正在生成 all.txt (合并所有运营商)...")
-        merged_all = self._merge_ranges(total_list)
-        self._write_to_file(merged_all, "all.txt")
-        print(f"[Success] 合并版 -> all.txt (共 {len(merged_all)} 条)")
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def _write_to_file(self, ranges, filename):
-        full_path = os.path.join(OUTPUT_DIR, filename)
-        with open(full_path, 'w') as f:
-            for s, e in ranges:
-                try:
-                    s_addr = ipaddress.IPv4Address(s)
-                    e_addr = ipaddress.IPv4Address(e)
-                    # 转换为 CIDR
-                    for net in ipaddress.summarize_address_range(s_addr, e_addr):
-                        f.write(str(net) + '\n')
-                except:
-                    pass
+        for prov_code, isp_data in results.items():
+            has_data = any(len(ranges) > 0 for ranges in isp_data.values())
+            if not has_data:
+                continue
+
+            prov_dir = os.path.join(OUTPUT_DIR, prov_code)
+            if not os.path.exists(prov_dir):
+                os.makedirs(prov_dir)
+
+            for isp_code, ranges in isp_data.items():
+                if not ranges: continue
+
+                merged = self._merge_ranges(ranges)
+                filename = os.path.join(prov_dir, f"{isp_code}.txt")
+                
+                # === 获取中文名称用于注释 ===
+                # 如果是 nationwide，手动显示为“全国”
+                if prov_code == 'nationwide':
+                    prov_cn_name = "全国(汇总)"
+                else:
+                    prov_cn_name = CODE_TO_PROV_CN.get(prov_code, prov_code)
+                
+                isp_cn_name = CODE_TO_ISP_CN.get(isp_code, isp_code)
+                
+                # === 写入文件 ===
+                with open(filename, 'w') as f:
+                    # 写入第一行注释
+                    # 格式: # 陕西 移动 (共 520 条规则) - 2024-05-20 08:00:00
+                    header = f"# {prov_cn_name} {isp_cn_name} IP段列表 | 规则数: {len(merged)} | 更新时间: {current_time}\n"
+                    f.write(header)
+
+                    for s, e in merged:
+                        try:
+                            s_addr = ipaddress.IPv4Address(s)
+                            e_addr = ipaddress.IPv4Address(e)
+                            for net in ipaddress.summarize_address_range(s_addr, e_addr):
+                                f.write(str(net) + '\n')
+                        except:
+                            pass
+            
+        print("[Success] 所有文件生成完毕。")
 
     def _merge_ranges(self, raw_ranges):
         if not raw_ranges: return []
-        # 按起始 IP 排序
         raw_ranges.sort(key=lambda x: x[0])
         merged = []
         curr_s, curr_e = raw_ranges[0]
         
         for next_s, next_e in raw_ranges[1:]:
-            # 逻辑：如果下一段的起始 <= 当前段的结束+1，说明重叠或连续
             if next_s <= curr_e + 1:
-                # 合并：结束点取两者最大值
                 curr_e = max(curr_e, next_e)
             else:
                 merged.append((curr_s, curr_e))
