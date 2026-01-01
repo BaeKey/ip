@@ -7,7 +7,7 @@ import requests
 # === 配置项 ===
 QQWRY_URL = "https://github.com/nmgliangwei/qqwry/raw/refs/heads/main/qqwry.dat"
 DB_FILE = "qqwry.dat"
-OUTPUT_DIR = "output"
+OUTPUT_DIR = "data"
 
 # 定义要抓取的运营商关键词
 TASKS = {
